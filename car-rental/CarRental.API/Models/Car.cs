@@ -45,11 +45,11 @@ public class Car
     [Column("daily_rate", TypeName = "decimal(15,2)")]
     public decimal RentalPricePerDay { get; set; }
 
-    [MaxLength(2000)]
+    [MaxLength(500)]
     [Column("describe")]
     public string? Description { get; set; }
 
-    [MaxLength(2000)]
+    [MaxLength(500)]
     [Column("features")]
     public string? Features { get; set; }
 
