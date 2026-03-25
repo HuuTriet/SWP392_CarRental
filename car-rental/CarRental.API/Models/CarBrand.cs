@@ -7,13 +7,17 @@ namespace CarRental.API.Models;
 public class CarBrand
 {
     [Key]
-    [Column("car_brand_id")]
+    [Column("brand_id")]
     public int CarBrandId { get; set; }
 
     [Required]
     [MaxLength(100)]
     [Column("brand_name")]
     public string BrandName { get; set; } = string.Empty;
+
+    [MaxLength(50)]
+    [Column("country")]
+    public string? Country { get; set; }
 
     [Column("is_deleted")]
     public bool IsDeleted { get; set; } = false;

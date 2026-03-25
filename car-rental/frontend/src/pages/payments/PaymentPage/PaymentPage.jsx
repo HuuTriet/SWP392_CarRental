@@ -9,6 +9,7 @@ import PickupPaymentSummary from "@/components/features/payments/PickupPaymentSu
 import RetryPaymentSummary from '@/components/features/payments/RetryPaymentSummary'
 import PlatformFeePaymentSummary from '@/components/features/payments/PlatformFeePaymentSummary'
 import LoadingSpinner from '@/components/ui/Loading/LoadingSpinner.jsx';
+import StripePayment from '@/components/features/payments/StripePayment.jsx';
 import {
   FaCreditCard,
   FaHandHoldingUsd,
@@ -28,7 +29,6 @@ import {
   FaMapMarkerAlt,
   FaEnvelope,
   FaUndoAlt,
-  FaMobile,
 } from "react-icons/fa"
 import { getItem } from '@/utils/auth'
 import Footer from '@/components/layout/Footer/Footer.jsx';
@@ -404,6 +404,8 @@ const PaymentPage = () => {
   const [isProcessing, setIsProcessing] = useState(false)
   const [toast, setToast] = useState({ show: false, message: "", type: "" })
   const [isLoading, setIsLoading] = useState(true)
+  const [showStripeForm, setShowStripeForm] = useState(false)
+  const [stripeBookingId, setStripeBookingId] = useState(null)
 
   // Lấy total và deposit từ bookingInfo nếu có, ưu tiên data truyền từ ProfilePage
   let total = 0;
@@ -793,28 +795,52 @@ const PaymentPage = () => {
           deliveryRequested: deliveryRequested || false,
           paymentType: paymentType,
         }
-        endpoint = "/api/payments"
-        
+        endpoint = "/api/payment"
+
       } else if (bookingInfo && !bookingId) {
-        // Trường hợp tạo booking mới - sử dụng /api/payments/with-booking
-        paymentType = 'deposit'; // Chỉ cho phép deposit khi tạo booking mới
-        
-        paymentData = {
+        // Tạo booking mới trước, sau đó xử lý thanh toán
+        const createdBooking = await post('/api/bookings', {
           carId: bookingInfo.carId,
-          pickupDateTime: bookingInfo.pickupDateTime,
-          dropoffDateTime: bookingInfo.dropoffDateTime,
+          startDate: bookingInfo.pickupDateTime,
+          endDate: bookingInfo.dropoffDateTime,
           pickupLocation: bookingInfo.pickupLocation,
           dropoffLocation: bookingInfo.dropoffLocation,
-          seatNumber: bookingInfo.seatNumber,
-          withDriver: bookingInfo.withDriver || false,
-          deliveryRequested: bookingInfo.deliveryRequested || false,
-          amount: amountToPay,
-          currency: "VND",
           paymentMethod: paymentMethod,
-          customerInfo: customerInfo,
-          paymentType: paymentType,
+        })
+        const newBookingId = createdBooking.bookingId
+
+        if (paymentMethod === 'stripe') {
+          setStripeBookingId(newBookingId)
+          setShowStripeForm(true)
+          setIsProcessing(false)
+          return
         }
-        endpoint = "/api/payments/with-booking"
+
+        // Cash / các hình thức khác: booking đã tạo, trả tiền khi nhận xe
+        localStorage.removeItem("lastBookingId")
+        localStorage.removeItem("lastPriceBreakdown")
+        localStorage.removeItem("lastBookingInfo")
+        localStorage.removeItem("lastCustomerInfo")
+        setPaymentStatus("success")
+        showToast("Đặt xe thành công!", "success")
+        setTimeout(() => {
+          navigate("/booking-success", {
+            state: {
+              bookingId: newBookingId,
+              amount: 0,
+              priceBreakdown,
+              totalAmount: priceBreakdown?.total || 0,
+              withDriver,
+              deliveryRequested,
+              customerInfo,
+              bookingInfo,
+              depositAmount,
+              collateralAmount,
+              paymentType: 'cash',
+            }
+          })
+        }, 1500)
+        return
       } else {
         // Trường hợp chỉ có bookingId (fallback)
         paymentData = {
@@ -827,11 +853,19 @@ const PaymentPage = () => {
           deliveryRequested: deliveryRequested || false,
           paymentType: pickupPayment ? 'full_payment' : undefined,
         }
-        endpoint = "/api/payments"
+        endpoint = "/api/payment"
       }
 
       console.log("🔍 [DEBUG] Final paymentType:", paymentType);
       console.log("🔍 [DEBUG] Using endpoint:", endpoint);
+
+      // Stripe: dùng bookingId đã có, để StripePayment component tự tạo intent
+      if (paymentMethod === "stripe") {
+        setStripeBookingId(Number.parseInt(bookingId));
+        setShowStripeForm(true);
+        setIsProcessing(false);
+        return;
+      }
 
       const response = await post(endpoint, paymentData)
 
@@ -878,8 +912,14 @@ const PaymentPage = () => {
       // Ưu tiên lấy message tiếng Việt từ backend nếu có
       const backendMessage = err.response?.data?.message || err.response?.data?.error || err.response?.data;
       if (err.response?.status === 401) {
+        // Clear stale token so user must re-login
+        localStorage.removeItem('token')
+        localStorage.removeItem('expiresAt')
+        localStorage.removeItem('role')
+        localStorage.removeItem('username')
+        localStorage.removeItem('userId')
         setError("Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.")
-        setTimeout(() => navigate("/login"), 2000)
+        setTimeout(() => navigate("/login?redirectTo=/payment"), 2000)
       } else if (err.response?.status === 400) {
         setError(backendMessage || "Dữ liệu thanh toán không hợp lệ")
       } else if (err.response?.status === 409) {
@@ -1096,26 +1136,14 @@ const PaymentPage = () => {
 
                     <div className="space-y-6">
                       <PaymentMethodCard
-                        method="vnpay"
-                        selected={paymentMethod === "vnpay"}
+                        method="stripe"
+                        selected={paymentMethod === "stripe"}
                         onSelect={handlePaymentMethodChange}
                         icon={FaCreditCard}
-                        title="VNPay"
-                        description="Thanh toán online qua VNPay - Nhanh chóng, an toàn và tiện lợi"
+                        title="Stripe (Thẻ tín dụng / Ghi nợ)"
+                        description="Thanh toán an toàn qua Stripe - Visa, Mastercard và nhiều hơn nữa"
                         badge="Khuyến nghị"
                         color="blue"
-                      />
-
-                      <PaymentMethodCard
-                        method="momo"
-                        selected={paymentMethod === "momo"}
-                        onSelect={handlePaymentMethodChange}
-                        icon={FaMobile}
-                        title="MoMo"
-                        description="Thanh toán qua ví MoMo - Nhanh chóng và tiện lợi với nhiều ưu đãi"
-                        badge="Mới"
-                        color="pink"
-                        logoImg="/images/momo-logo.png"
                       />
 
                       {!platformFeePayment && (
@@ -1129,6 +1157,34 @@ const PaymentPage = () => {
                           badge="Truyền thống"
                           color="orange"
                         />
+                      )}
+
+                      {/* Stripe form hiện khi đã chọn stripe */}
+                      {paymentMethod === "stripe" && showStripeForm && stripeBookingId && (
+                        <div className="mt-4 p-6 bg-white border-2 border-blue-200 rounded-2xl shadow-lg">
+                          <h3 className="font-semibold text-gray-800 mb-4">Nhập thông tin thẻ</h3>
+                          <StripePayment
+                            bookingId={stripeBookingId}
+                            amount={amountToPay}
+                            onSuccess={(intent) => {
+                              setPaymentStatus("success");
+                              showToast("Thanh toán thành công!", "success");
+                              setTimeout(() => {
+                                navigate("/booking-success", {
+                                  state: {
+                                    bookingId: stripeBookingId,
+                                    paymentId: intent.id,
+                                    amount: amountToPay,
+                                    priceBreakdown,
+                                    customerInfo,
+                                    bookingInfo,
+                                  }
+                                });
+                              }, 1500);
+                            }}
+                            onError={(msg) => { setError(msg); setIsProcessing(false); }}
+                          />
+                        </div>
                       )}
                     </div>
                   </div>

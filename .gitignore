@@ -32,3 +32,8 @@ desktop.ini
 # IDE
 .idea/
 *.iml
+
+# Debug/test scripts
+*.bat
+src/test-*.js
+*.gz

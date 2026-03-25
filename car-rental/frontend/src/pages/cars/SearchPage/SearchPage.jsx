@@ -247,10 +247,11 @@ const SearchPage = () => {
                 params: { page, size: carsPerPage },
                 headers: token ? { Authorization: `Bearer ${token}` } : {},
             })
+            const pageData = response.data || {};
             return {
-                content: response.data || [],
-                totalElements: response.data?.length || 0,
-                totalPages: Math.ceil((response.data?.length || 0) / carsPerPage),
+                content: pageData.content || [],
+                totalElements: pageData.totalElements || 0,
+                totalPages: pageData.totalPages || 1,
             }
         } catch (error) {
             console.error("Error fetching featured cars:", error)
@@ -265,10 +266,11 @@ const SearchPage = () => {
                 params: { page, size: carsPerPage },
                 headers: token ? { Authorization: `Bearer ${token}` } : {},
             })
+            const pageData = response.data || {};
             return {
-                content: response.data || [],
-                totalElements: response.data?.length || 0,
-                totalPages: Math.ceil((response.data?.length || 0) / carsPerPage),
+                content: pageData.content || [],
+                totalElements: pageData.totalElements || 0,
+                totalPages: pageData.totalPages || 1,
             }
         } catch (error) {
             console.error("Error fetching popular cars:", error)
@@ -291,11 +293,12 @@ const SearchPage = () => {
                 });
             }
             const response = await filterCars(finalFilters, page, carsPerPage, filters.sortBy || "")
-            setCars(response.data)
-            setFilteredCars(response.data.content || [])
+            const pageData = response.data || {};
+            setCars(pageData)
+            setFilteredCars(pageData.content || [])
 
             // Xử lý thông báo khi không có xe
-            if (!response.data.content || response.data.content.length === 0) {
+            if (!pageData.content || pageData.content.length === 0) {
                 if (filters.pickupLocation) {
                     setNoCarMessage(`Không có xe phù hợp với địa điểm "${filters.pickupLocation}". Vui lòng thử địa điểm khác.`);
                 } else {
@@ -327,29 +330,26 @@ const SearchPage = () => {
             const token = getToken();
             const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
 
-            // Fetch filter data song song
+            // Fetch filter data song song — dùng allSettled để endpoint thiếu không làm crash
             const [
                 brandsRes,
-                countriesRes,
-                seatOptionsRes,
-                priceRangesRes,
                 yearsRes,
                 fuelTypesRes
-            ] = await Promise.all([
-                api.get("/api/cars/car-brands", config),
-                api.get("/api/cars/country-codes", config),
-                api.get("/api/cars/seat-options", config),
-                api.get("/api/cars/price-ranges", config),
+            ] = await Promise.allSettled([
+                api.get("/api/cars/brands", config),
                 api.get("/api/cars/years", config),
                 api.get("/api/cars/fuel-types", config),
             ]);
 
-            setBrands(brandsRes.data || []);
-            setCountries(countriesRes.data || []);
-            setSeatOptions(seatOptionsRes.data || []);
-            setPriceRanges(priceRangesRes.data || []);
-            setYears(yearsRes.data || []);
-            setFuelTypes(fuelTypesRes.data || []);
+            const extract = (res) => {
+                if (res.status !== 'fulfilled') return [];
+                const d = res.value?.data;
+                return d?.data ?? d ?? [];
+            };
+
+            setBrands(extract(brandsRes));
+            setYears(extract(yearsRes));
+            setFuelTypes(extract(fuelTypesRes));
 
             // Xác định loại filter từ location state
             const filterType = location.state?.filterType || "all";
@@ -760,8 +760,9 @@ const SearchPage = () => {
 
     // Car Categorization
     const carContent = Array.isArray(filteredCars) ? filteredCars : []
-    const rentedCars = carContent.filter((car) => car?.statusName?.toLowerCase() === "rented")
-    const availableCars = carContent.filter((car) => car?.statusName?.toLowerCase() === "available")
+    const getCarStatus = (car) => (car?.status || car?.statusName || '').toLowerCase()
+    const rentedCars = carContent.filter((car) => getCarStatus(car) === "rented")
+    const availableCars = carContent.filter((car) => getCarStatus(car) !== "rented")
     const displayedRentedCars = showAllRented ? rentedCars : rentedCars.slice(0, rentedCarsLimit)
 
     // Quick View Modal Component
@@ -774,7 +775,7 @@ const SearchPage = () => {
                     {/* Header */}
                     <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between rounded-t-2xl">
                         <div>
-                            <h2 className="text-2xl font-bold text-gray-900">{car.brandName} {car.model}</h2>
+                            <h2 className="text-2xl font-bold text-gray-900">{car.brandName} {car.carModel || car.model}</h2>
                             <p className="text-gray-600">Xem chi tiết nhanh về chiếc xe này</p>
                         </div>
                         <button
@@ -792,20 +793,21 @@ const SearchPage = () => {
                                 <div className="relative h-64 rounded-xl overflow-hidden">
                                     <img
                                         src={
+                                            car.thumbnailUrl ||
                                             car.images?.find((img) => img.isMain)?.imageUrl ||
                                             car.images?.[0]?.imageUrl ||
                                             "/placeholder.svg"
                                         }
-                                        alt={`${car.brandName} ${car.model}`}
+                                        alt={`${car.brandName} ${car.carModel || car.model}`}
                                         className="w-full h-full object-cover"
                                     />
                                     {/* Status Badge */}
                                     <div className="absolute top-4 left-4">
-                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${car.statusName?.toLowerCase() === "available"
+                                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${(car.status || car.statusName)?.toLowerCase() !== "rented"
                                             ? "bg-green-500 text-white"
                                             : "bg-red-500 text-white"
                                             }`}>
-                                            {car.statusName?.toLowerCase() === "available" ? "Có sẵn" : "Đang thuê"}
+                                            {(car.status || car.statusName)?.toLowerCase() === "rented" ? "Đang thuê" : "Có sẵn"}
                                         </span>
                                     </div>
                                 </div>
@@ -849,7 +851,7 @@ const SearchPage = () => {
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="flex items-center space-x-3">
                                         <FaUsers className="text-blue-500" />
-                                        <span>{car.numOfSeats || 7} chỗ ngồi</span>
+                                        <span>{car.seats || car.numOfSeats || 7} chỗ ngồi</span>
                                     </div>
                                     <div className="flex items-center space-x-3">
                                         <FaGasPump className="text-green-500" />
@@ -906,13 +908,13 @@ const SearchPage = () => {
                                 <div className="bg-blue-50 rounded-xl p-4">
                                     <div className="flex items-baseline space-x-2 mb-2">
                                         <span className="text-3xl font-bold text-blue-600">
-                                            {formatVND(car.dailyRate)}
+                                            {formatVND(car.rentalPricePerDay || car.dailyRate)}
                                         </span>
                                         <span className="text-gray-600">/ngày</span>
                                     </div>
                                     {car.discount && (
                                         <span className="text-gray-400 line-through text-sm">
-                                            {formatVND(Math.round(car.dailyRate / (1 - car.discount / 100)))}
+                                            {formatVND(Math.round((car.rentalPricePerDay || car.dailyRate) / (1 - car.discount / 100)))}
                                         </span>
                                     )}
                                 </div>
@@ -1036,12 +1038,12 @@ const SearchPage = () => {
                     )}
                     <img
                         src={
+                            car.thumbnailUrl ||
                             car.images?.find((img) => img.isMain)?.imageUrl ||
                             car.images?.[0]?.imageUrl ||
-                            "https://via.placeholder.com/400x250?text=Car+Image" ||
-                            "/placeholder.svg"
+                            "https://via.placeholder.com/400x250?text=Car+Image"
                         }
-                        alt={`${car.model}`}
+                        alt={`${car.carModel || car.model}`}
                         className={`w-full h-full object-cover object-center transition-all duration-700 ${isHovered ? "scale-110" : "scale-100"
                             } ${imageLoaded ? "opacity-100" : "opacity-0"}`}
                         loading="lazy"
@@ -1100,9 +1102,9 @@ const SearchPage = () => {
                             <h3
                                 className="text-xl font-bold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors cursor-pointer line-clamp-1"
                                 onClick={() => navigate(`/cars/${car.carId}`)}
-                                title={`${car.model}`}
+                                title={`${car.carModel || car.model}`}
                             >
-                                {car.model}
+                                {car.carModel || car.model}
                             </h3>
                             <p className="text-gray-500 text-sm">
                                 {car.year} • {car.regionName || 'Hà Nội'}
@@ -1115,7 +1117,7 @@ const SearchPage = () => {
                     <div className="flex items-center space-x-4 mb-4 text-sm text-gray-600">
                         <div className="flex items-center space-x-1">
                             <FaUsers className="text-blue-500" />
-                            <span>{car.numOfSeats || 5} chỗ</span>
+                            <span>{car.seats || car.numOfSeats || 5} chỗ</span>
                         </div>
                         <div className="flex items-center space-x-1">
                             <FaGasPump className="text-green-500" />
@@ -1155,13 +1157,13 @@ const SearchPage = () => {
                         <div className="flex flex-col">
                             <div className="flex items-baseline space-x-2">
                                 <span className="text-2xl font-bold text-blue-600">
-                                    {formatVND(car.dailyRate)}
+                                    {formatVND(car.rentalPricePerDay || car.dailyRate)}
                                 </span>
                                 <span className="text-sm text-gray-500">/ngày</span>
                             </div>
                             {car.discount && (
                                 <span className="text-sm text-gray-400 line-through">
-                                    {formatVND(Math.round(car.dailyRate / (1 - car.discount / 100)))}
+                                    {formatVND(Math.round((car.rentalPricePerDay || car.dailyRate) / (1 - car.discount / 100)))}
                                 </span>
                             )}
                         </div>
@@ -1347,6 +1349,11 @@ const SearchPage = () => {
 
     // Handler khi nhấn Đặt xe ở CarCard
     const handleBookNow = (car) => {
+        const token = getToken();
+        if (!token) {
+            navigate('/login', { state: { from: window.location.pathname + window.location.search } });
+            return;
+        }
         setSelectedCar(car);
         setIsBookingModalOpen(true);
     };
@@ -1570,7 +1577,7 @@ const SearchPage = () => {
         const allNames = [
             ...new Set(
                 (cars.content || [])
-                    .flatMap(car => [car.brandName, car.model])
+                    .flatMap(car => [car.brandName, car.carModel || car.model])
                     .filter(Boolean)
             )
         ];
@@ -2300,12 +2307,12 @@ const SearchPage = () => {
                                             <div key={id} className="relative group">
                                                 <img
                                                     src={
+                                                        car.thumbnailUrl ||
                                                         car.images?.find((img) => img.isMain)?.imageUrl ||
                                                         car.images?.[0]?.imageUrl ||
-                                                        "https://via.placeholder.com/300" ||
-                                                        "/placeholder.svg"
+                                                        "https://via.placeholder.com/300"
                                                     }
-                                                    alt={car.model}
+                                                    alt={car.carModel || car.model}
                                                     className="w-16 h-16 object-cover rounded-xl shadow-lg group-hover:scale-110 transition-transform"
                                                 />
                                                 <button
@@ -2315,7 +2322,7 @@ const SearchPage = () => {
                                                     <FaTimes />
                                                 </button>
                                                 <div className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 text-xs text-gray-600 whitespace-nowrap">
-                                                    {car.model}
+                                                    {car.carModel || car.model}
                                                 </div>
                                             </div>
                                         ) : null

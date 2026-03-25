@@ -17,7 +17,6 @@ public class UserRepository : BaseRepository<User>, IUserRepository
     public async Task<User?> GetWithDetailAsync(int userId) =>
         await _dbSet.Include(u => u.Role)
                     .Include(u => u.UserDetail)
-                    .Include(u => u.Language)
                     .FirstOrDefaultAsync(u => u.UserId == userId);
 
     public async Task<bool> EmailExistsAsync(string email) =>
@@ -40,7 +39,7 @@ public class UserRepository : BaseRepository<User>, IUserRepository
 
         if (!string.IsNullOrEmpty(search))
             query = query.Where(u => u.Email.Contains(search) ||
-                                     (u.FullName != null && u.FullName.Contains(search)));
+                                     u.Username.Contains(search));
 
         var total = await query.CountAsync();
         var items = await query.Skip(page * size).Take(size).ToListAsync();

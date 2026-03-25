@@ -57,6 +57,15 @@ api.interceptors.request.use(
 api.interceptors.response.use(
     (response) => {
         console.log('[API Response]', response.status, response.config.url, response.data);
+        // Auto-unwrap ApiResponse<T> = { success, data, message, statusCode }
+        if (
+            response.data &&
+            typeof response.data === 'object' &&
+            'success' in response.data &&
+            'data' in response.data
+        ) {
+            response.data = response.data.data;
+        }
         return response;
     },
     (error) => {
@@ -68,33 +77,23 @@ api.interceptors.response.use(
         console.log('[API Response Error] - ExpiresAt:', getItem('expiresAt'));
         
         if (error.response?.status === 401) {
-            console.log('[API Response Error] 401 error detected - checking if token expired');
-            
-            // Kiểm tra token có thực sự hết hạn không
-            if (isTokenExpired()) {
-                console.log('[API Response Error] Token has expired, clearing auth data');
-                
-                // Chỉ clear token nếu không phải là public endpoints
-                const isPublicEndpoint = error.config?.url?.includes('/cars') || 
-                                       error.config?.url?.includes('/regions') ||
-                                       error.config?.url?.includes('/car-brands');
-                
-                if (!isPublicEndpoint) {
+            const existingToken = getItem('token');
+            // Redirect khi có token nhưng bị từ chối (hết hạn HOẶC không hợp lệ với backend mới)
+            if (existingToken) {
+                const publicPaths = ['/', '/cars', '/car-detail', '/login', '/register', '/search', '/bookings/confirmation'];
+                const isPublicPage = publicPaths.some(p =>
+                    window.location.pathname === p || window.location.pathname.startsWith(p + '/')
+                );
+                if (!isPublicPage && !window.location.pathname.startsWith('/payment')) {
                     localStorage.removeItem('token');
                     localStorage.removeItem('expiresAt');
                     localStorage.removeItem('role');
                     localStorage.removeItem('username');
                     localStorage.removeItem('userId');
-                    
-                    // Delay redirect để tránh interrupt payment flow
                     setTimeout(() => {
-                        if (!window.location.pathname.includes('/payment/')) {
-                            window.location.href = '/login?error=session_expired';
-                        }
+                        window.location.href = '/login?error=session_expired';
                     }, 100);
                 }
-            } else {
-                console.log('[API Response Error] Token not expired, may be server issue');
             }
         }
         return Promise.reject(error);
@@ -127,11 +126,10 @@ export const handleGoogleLoginCallback = () => {
 export const login = async (username, password) => {
     if (!username || !password) throw new Error('Vui lòng cung cấp tên đăng nhập và mật khẩu');
     try {
-        console.log('[API] Attempting login for username:', username);
-        const response = await api.post('/api/auth/login', { username, password });
-        return response.data;
+        const response = await api.post('/api/auth/login', { email: username, password });
+        // Backend wraps response in ApiResponse<AuthResponse> → { success, data: { token, role, ... } }
+        return response.data?.data ?? response.data;
     } catch (error) {
-        console.error('[API] Login error:', error);
         throw error;
     }
 };
@@ -145,6 +143,16 @@ export const register = async (userData) => {
         console.error('[API] Register error:', error.response?.data);
         throw new Error(error.response?.data?.error || error.response?.data?.message || 'Đăng ký thất bại');
     }
+};
+
+export const sendEmailOtp = async (email) => {
+    const response = await api.post('/api/auth/send-email-otp', { email });
+    return response.data;
+};
+
+export const verifyEmailOtp = async (email, otp) => {
+    const response = await api.post('/api/auth/verify-email-otp', { email, otp });
+    return response.data;
 };
 
 export const checkEmail = async (email) => {
@@ -175,7 +183,7 @@ export const changePassword = async (currentPassword, newPassword) => {
     console.log('🔐 Change password payload:', payload);
 
     try {
-        const response = await api.post('/api/users/change-password', payload);
+        const response = await api.post('/api/auth/change-password', payload);
         console.log('✅ Change password success:', response.data);
         return response.data;
     } catch (error) {
@@ -220,9 +228,9 @@ export const logout = async () => {
 export const getProfile = async () => {
     try {
         console.log('🔄 Fetching user profile...');
-        const response = await api.get('/api/users/profile');
+        const response = await api.get('/api/users/me');
         console.log('✅ Profile fetched successfully:', response.data);
-        return response.data;
+        return response.data?.data ?? response.data;
     } catch (error) {
         console.error('❌ Profile fetch error:', {
             status: error.response?.status,
@@ -251,7 +259,7 @@ export const updateProfile = async (userData) => {
     if (!userData) throw new Error('Vui lòng cung cấp dữ liệu cập nhật');
     
     try {
-        const response = await api.put('/api/users/profile', userData);
+        const response = await api.put('/api/users/me', userData);
         return response.data;
     } catch (error) {
         if (error && error.stack) {
@@ -337,7 +345,7 @@ export const toggleUserStatus = async (userId, reason = null) => {
         console.log("Request body:", requestBody);
         console.log("API URL:", `/api/users/${userId}/toggle-status`);
         
-        const response = await api.put(`/api/users/${userId}/toggle-status`, requestBody, {
+        const response = await api.patch(`/api/users/${userId}/toggle-active`, requestBody, {
             headers: {
                 'Content-Type': 'application/json',
             },
@@ -374,11 +382,10 @@ export const getFavorites = async () => {
     }
 };
 
-export const addFavorite = async (carId, supplierId) => {
+export const addFavorite = async (carId) => {
     if (!carId) throw new Error('Vui lòng cung cấp ID xe');
-    if (!supplierId) throw new Error('Vui lòng cung cấp ID chủ xe');
     try {
-        const response = await api.post('/api/favorites', { carId, supplierId });
+        const response = await api.post('/api/favorites/toggle', { carId });
         invalidateCache('favorites');
         return response.data;
     } catch (error) {
@@ -386,10 +393,10 @@ export const addFavorite = async (carId, supplierId) => {
     }
 };
 
-export const removeFavorite = async (favoriteId) => {
-    if (!favoriteId) throw new Error('Vui lòng cung cấp ID yêu thích');
+export const removeFavorite = async (carId) => {
+    if (!carId) throw new Error('Vui lòng cung cấp ID xe');
     try {
-        const response = await api.delete(`/api/favorites/${favoriteId}`);
+        const response = await api.post('/api/favorites/toggle', { carId });
         invalidateCache('favorites');
         return response.data;
     } catch (error) {
@@ -427,8 +434,8 @@ export const searchCars = async (filters = {}, page = 0, size = 10) => {
             params.dropoffDateTime = filters.dropoffDateTime;
         }
 
-        const response = await api.get('/api/cars/search', { params });
-        return response.data;
+        const response = await api.get('/api/cars/filter', { params });
+        return response.data?.data ?? response.data;
     } catch (error) {
         if (error.message.includes('CORS')) return { content: [] };
         throw new Error(error.response?.data?.message || 'Tìm kiếm xe thất bại');
@@ -439,7 +446,15 @@ export const getCarById = async (carId) => {
     if (!carId) throw new Error('Vui lòng cung cấp ID xe');
     try {
         const response = await api.get(`/api/cars/${carId}`);
-        return response.data;
+        const car = response.data?.data ?? response.data;
+        if (!car) return car;
+        // Normalize field names for frontend compatibility
+        return {
+            ...car,
+            model: car.carModel || car.model,
+            dailyRate: car.rentalPricePerDay || car.dailyRate,
+            images: car.images || (car.imageUrls || []).map(url => ({ imageUrl: url })),
+        };
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy thông tin xe thất bại');
     }
@@ -462,11 +477,12 @@ export const getCarBrands = async () => {
     if (cache.has(cacheKey)) return cache.get(cacheKey);
     try {
         const token = getToken();
-        const response = await api.get('/api/car-brands', {
+        const response = await api.get('/api/cars/brands', {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        cache.set(cacheKey, response.data);
-        return response.data;
+        const result = response.data?.data ?? response.data;
+        cache.set(cacheKey, result);
+        return result;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy danh sách thương hiệu xe thất bại');
     }
@@ -508,11 +524,12 @@ export const getRegions = async () => {
     if (cache.has(cacheKey)) return cache.get(cacheKey);
     try {
         const token = getToken();
-        const response = await api.get('/api/regions', {
+        const response = await api.get('/api/cars/regions', {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        cache.set(cacheKey, response.data);
-        return response.data;
+        const result = response.data?.data ?? response.data;
+        cache.set(cacheKey, result);
+        return result;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy danh sách địa điểm thất bại');
     }
@@ -631,7 +648,7 @@ export const confirmBooking = async (bookingData) => {
 export const getBookingFinancials = async (bookingId) => {
     if (!bookingId) throw new Error('Vui lòng cung cấp ID đặt xe');
     try {
-        const response = await api.get(`/api/bookings/${bookingId}/financials`);
+        const response = await api.get(`/api/bookings/${bookingId}/financial`);
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy thông tin tài chính thất bại');
@@ -662,7 +679,7 @@ export const updateBooking = async (bookingId, bookingData) => {
 export const cancelBooking = async (bookingId) => {
     if (!bookingId) throw new Error('Thiếu bookingId');
     try {
-        const response = await api.put(`/api/bookings/${bookingId}/cancel`);
+        const response = await api.post(`/api/bookings/${bookingId}/cancel`);
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.error || error.response?.data?.message || 'Không thể hủy booking');
@@ -704,6 +721,17 @@ export const getActivePromotions = async () => {
 };
 
 // Quản lý thanh toán
+// Stripe payment
+export const createStripePaymentIntent = async (bookingId, amount) => {
+    const response = await api.post('/api/payment/stripe/create-intent', { bookingId, amount });
+    return response.data;
+};
+
+export const confirmStripePayment = async (bookingId, paymentIntentId) => {
+    const response = await api.post('/api/payment/stripe/confirm', { bookingId, paymentIntentId });
+    return response.data;
+};
+
 export const initiatePayment = async (paymentData) => {
     try {
         const response = await post('/api/payments', paymentData);
@@ -827,7 +855,7 @@ export const getSimilarCarsAdvanced = async (carId, page = 0, size = 4) => {
 export const testAuth = async () => {
     try {
         console.log('🧪 Testing authentication...');
-        const response = await api.get('/api/users/profile');
+        const response = await api.get('/api/users/me');
         console.log('✅ Auth test successful:', response.data);
         return response.data;
     } catch (error) {
@@ -847,25 +875,9 @@ export const getUserBookingHistory = async () => {
         console.log('🔄 Fetching user booking history...');
         
         // ✅ SỬA: Gọi endpoint UserController thay vì BookingController
-        const response = await api.get('/api/users/profile/bookings');
+        const response = await api.get('/api/bookings/my-bookings');
         
         console.log('✅ Booking history fetched successfully:', response.data);
-        
-        // ✅ Debug payment info
-        if (response.data.success && response.data.data) {
-            console.log(`📊 Total bookings: ${response.data.total}`);
-            response.data.data.forEach((booking, index) => {
-                console.log(`📋 Booking ${index + 1}:`, {
-                    bookingId: booking.bookingId,
-                    carModel: booking.carModel,
-                    statusName: booking.statusName,
-                    paymentStatus: booking.paymentStatus,
-                    paymentType: booking.paymentType,
-                    paymentAmount: booking.paymentAmount,
-                    paymentDate: booking.paymentDate
-                });
-            });
-        }
         
         return response.data;
     } catch (error) {
@@ -935,16 +947,6 @@ export const getBookingDetails = async (bookingId) => {
         
         const response = await api.get(`/api/bookings/${bookingId}`);
         console.log('✅ Booking details fetched:', response.data);
-        if (response.data.success && response.data.data) {
-            const booking = response.data.data;
-            console.log('💰 Booking details payment info:', {
-                bookingId: booking.bookingId,
-                paymentStatus: booking.paymentStatus,
-                paymentType: booking.paymentType,
-                paymentAmount: booking.paymentAmount,
-                paymentDate: booking.paymentDate
-            });
-        }
         return response.data;
     } catch (error) {
         console.error('❌ Fetch booking details error:', {
@@ -993,15 +995,15 @@ export const filterCars = (filters, page = 0, size = 9, sortBy = "") => {
 export const findCars = async (searchQuery, page = 0, size = 9) => {
     try {
         const token = getToken();
-        const response = await api.get('/api/cars/search/keyword', {
+        const response = await api.get('/api/cars/filter', {
             params: {
-                searchQuery,
+                keyword: searchQuery,
                 page,
                 size
             },
             headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        return response.data;
+        return response.data?.data ?? response.data;
     } catch (error) {
         console.error('Error searching cars:', error);
         throw new Error(error.response?.data?.message || 'Tìm kiếm xe thất bại');
@@ -1012,7 +1014,20 @@ export const getBookingById = async (bookingId) => {
     if (!bookingId) throw new Error('Vui lòng cung cấp ID đặt xe');
     try {
         const response = await api.get(`/api/bookings/${bookingId}`);
-        return response.data;
+        const data = response.data?.data ?? response.data;
+        if (!data) return data;
+        // Build nested car object from flat BookingDto fields
+        return {
+            ...data,
+            carId: data.carId || data.car_id,
+            car: data.car || {
+                model: data.carModel,
+                carModel: data.carModel,
+                brandName: data.carBrand,
+                imageUrl: data.carThumbnail,
+                images: data.carThumbnail ? [{ imageUrl: data.carThumbnail }] : [],
+            },
+        };
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy thông tin đặt xe thất bại');
     }
@@ -1044,7 +1059,7 @@ export const ensureBookingFinancials = async (bookingId) => {
 export const getReportsData = async () => {
     try {
         const response = await api.get('/api/reports/overview');
-        return response.data;
+        return response.data?.data ?? response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Lấy dữ liệu báo cáo thất bại');
     }
@@ -1087,22 +1102,63 @@ export const getRecentBookingUsers = async (size = 5) => {
 
 // Lấy danh sách xe của supplier
 export const getSupplierCars = async () => {
-    const res = await api.get('/api/supplier/cars');
-    return res.data;
+    const res = await api.get('/api/cars/supplier/my-cars');
+    const raw = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+    // Normalize field names to match frontend component expectations
+    return raw.map(car => ({
+        ...car,
+        model: car.carModel || car.model || '',
+        dailyRate: car.rentalPricePerDay ?? car.dailyRate ?? 0,
+        image: car.thumbnailUrl || car.image || null,
+        statusName: car.status || car.statusName || '',
+        brandName: car.brandName || '',
+    }));
 };
 
 // Thêm xe mới cho supplier
 export const addSupplierCar = async (carData, images = []) => {
-    const formData = new FormData();
-    formData.append('carData', JSON.stringify(carData));
-    images.forEach(img => formData.append('images', img));
-    const token = getItem('token');
-    const res = await api.post('/api/supplier/cars', formData, {
-        headers: {
-            'Content-Type': 'multipart/form-data',
-            ...(token && { Authorization: `Bearer ${token}` })
-        }
-    });
+    // 1. Fetch lookups để map name → id
+    const [brandsRes, fuelTypesRes, regionsRes] = await Promise.all([
+        api.get('/api/cars/brands').catch(() => ({ data: [] })),
+        api.get('/api/cars/fuel-types').catch(() => ({ data: [] })),
+        api.get('/api/cars/regions').catch(() => ({ data: [] })),
+    ]);
+    const brands = Array.isArray(brandsRes.data) ? brandsRes.data : (brandsRes.data?.data || []);
+    const fuelTypes = Array.isArray(fuelTypesRes.data) ? fuelTypesRes.data : (fuelTypesRes.data?.data || []);
+    const regions = Array.isArray(regionsRes.data) ? regionsRes.data : (regionsRes.data?.data || []);
+
+    const brandObj = brands.find(b => b.brandName?.toLowerCase() === carData.brand?.toLowerCase()) || brands[0];
+    const fuelObj = fuelTypes.find(f => f.fuelTypeName?.toLowerCase() === carData.fuelType?.toLowerCase()) || fuelTypes[0];
+    const regionObj = regions.find(r => r.regionName?.toLowerCase() === carData.region?.toLowerCase()) || regions[0];
+
+    // 2. Upload ảnh lên Cloudinary
+    const imageUrls = [];
+    for (const img of images) {
+        const fd = new FormData();
+        fd.append('file', img);
+        try {
+            const uploadRes = await api.post('/api/chat/upload-image', fd, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            imageUrls.push(typeof uploadRes.data === 'string' ? uploadRes.data : uploadRes.data?.url || uploadRes.data);
+        } catch { /* skip failed uploads */ }
+    }
+
+    // 3. Gửi JSON với field names đúng
+    const body = {
+        carModel: carData.name || carData.model,
+        carBrandId: brandObj?.carBrandId || 1,
+        fuelTypeId: fuelObj?.fuelTypeId || 1,
+        licensePlate: carData.licensePlate,
+        year: carData.year ? parseInt(carData.year) : undefined,
+        seats: carData.numOfSeats ? parseInt(carData.numOfSeats) : undefined,
+        transmission: carData.transmission,
+        rentalPricePerDay: parseFloat(carData.rentalPrice || carData.dailyRate),
+        description: carData.description,
+        regionId: regionObj?.regionId,
+        imageUrls,
+    };
+    const res = await api.post('/api/cars', body);
     return res.data;
 };
 
@@ -1110,7 +1166,7 @@ export const addSupplierCar = async (carData, images = []) => {
 export const deleteSupplierCar = async (carId) => {
     if (!carId) throw new Error('Vui lòng cung cấp ID xe');
     const token = getToken?.() || getItem('token');
-    const res = await api.delete(`/api/supplier/cars/${carId}`, {
+    const res = await api.delete(`/api/cars/${carId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
     });
     return res.data;
@@ -1119,37 +1175,60 @@ export const deleteSupplierCar = async (carId) => {
 // Cập nhật xe của supplier
 export const updateSupplierCar = async (carId, carData) => {
     if (!carId) throw new Error('Vui lòng cung cấp ID xe');
-    const token = getToken?.() || getItem('token');
-    const res = await api.put(`/api/supplier/cars/${carId}`, carData, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-    });
+    const body = {
+        carModel: carData.name || carData.model || carData.carModel,
+        licensePlate: carData.licensePlate,
+        year: carData.year ? parseInt(carData.year) : undefined,
+        seats: carData.numOfSeats ? parseInt(carData.numOfSeats) : (carData.seats ? parseInt(carData.seats) : undefined),
+        transmission: carData.transmission,
+        rentalPricePerDay: carData.rentalPrice ? parseFloat(carData.rentalPrice) : (carData.rentalPricePerDay ? parseFloat(carData.rentalPricePerDay) : undefined),
+        description: carData.description,
+        imageUrls: carData.imageUrls,
+    };
+    const res = await api.put(`/api/cars/${carId}`, body);
     return res.data;
 };
 
 // Lấy danh sách booking của supplier (đúng endpoint backend)
 export const getSupplierOrders = async () => {
-    const res = await api.get('/api/supplier/bookings');
-    return res.data;
+    const res = await api.get('/api/bookings/supplier/bookings');
+    const raw = Array.isArray(res.data) ? res.data : (res.data?.data || []);
+    return raw.map(b => ({
+        ...b,
+        statusName: b.statusName || b.status?.statusName || '',
+        carModel: b.carModel || b.car?.carModel || '',
+        totalPrice: b.totalPrice || b.bookingFinancial?.totalFare || 0,
+    }));
 };
 
 // Dashboard APIs
 export const getSupplierDashboardSummary = async () => {
-    const res = await api.get('/api/supplier/dashboard/summary');
-    return res.data;
+    const [carsRes, bookingsRes] = await Promise.all([
+        api.get('/api/cars/supplier/my-cars').catch(() => ({ data: [] })),
+        api.get('/api/bookings/supplier/bookings').catch(() => ({ data: [] })),
+    ]);
+    const cars = Array.isArray(carsRes.data) ? carsRes.data : (carsRes.data?.data || []);
+    const bookings = Array.isArray(bookingsRes.data) ? bookingsRes.data : (bookingsRes.data?.data || []);
+    const totalRevenue = bookings.reduce((sum, b) => sum + (b.totalPrice || b.totalFare || 0), 0);
+    return {
+        data: {
+            totalCars: cars.length,
+            totalBookings: bookings.length,
+            pendingBookings: bookings.filter(b => b.status === 'pending').length,
+            totalRevenue,
+        }
+    };
 };
 
 export const getSupplierRecentBookings = async () => {
-    const res = await api.get('/api/supplier/dashboard/recent-bookings');
+    const res = await api.get('/api/bookings/supplier/bookings');
     return res.data;
 };
 
 export const getSupplierMonthlyStats = async () => {
-    const token = getToken?.() || getItem('token');
-    const res = await api.get('/api/supplier/dashboard/monthly-stats', {
-      headers: token ? { Authorization: `Bearer ${token}` } : {}
-    });
+    const res = await api.get('/api/bookings/supplier/bookings').catch(() => ({ data: [] }));
     return res.data;
-  };
+};
 
 export const getNextBookingId = async () => {
     try {
@@ -1225,20 +1304,8 @@ export const getCustomersOfSupplier = async (supplierId) => {
 
 // Rating APIs
 export const getAllRatings = async () => {
-    const cacheKey = 'all-ratings';
-    if (cache.has(cacheKey)) {
-        return cache.get(cacheKey);
-    }
-    
-    try {
-        const response = await api.get('/api/ratings');
-        cache.set(cacheKey, response.data);
-        setTimeout(() => cache.delete(cacheKey), 60000); // Cache 1 phút
-        return response.data;
-    } catch (error) {
-        console.error('Error fetching all ratings:', error);
-        throw new Error(error.response?.data?.message || 'Không thể tải danh sách đánh giá');
-    }
+    // Backend does not have GET /api/ratings; return empty array
+    return [];
 };
 
 export const getRatingsByCarId = async (carId) => {
@@ -1248,7 +1315,7 @@ export const getRatingsByCarId = async (carId) => {
     }
     
     try {
-        const response = await api.get(`/api/ratings?carId=${carId}`);
+        const response = await api.get(`/api/ratings/car/${carId}`);
         cache.set(cacheKey, response.data);
         setTimeout(() => cache.delete(cacheKey), 30000); // Cache 30 giây
         return response.data;
@@ -1288,7 +1355,7 @@ export const updateRating = async (ratingId, ratingData) => {
 
 export const getRatingSummaryByCarId = async (carId) => {
     try {
-        const response = await api.get(`/api/ratings/summary?carId=${carId}`);
+        const response = await api.get(`/api/ratings/car/${carId}/average`);
         return response.data;
     } catch (error) {
         console.error(`Error fetching rating summary for car ${carId}:`, error);
@@ -1384,7 +1451,7 @@ export const payoutSupplier = async (bookingId) => {
 
 export const supplierConfirmBooking = async (bookingId) => {
     try {
-        const response = await api.put(`/api/supplier/bookings/${bookingId}/confirm`);
+        const response = await api.patch(`/api/bookings/${bookingId}/status`, { statusId: 2 });
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Không thể xác nhận đơn đặt xe');
@@ -1393,7 +1460,7 @@ export const supplierConfirmBooking = async (bookingId) => {
 
 export const supplierRejectBooking = async (bookingId) => {
     try {
-        const response = await api.put(`/api/supplier/bookings/${bookingId}/reject`);
+        const response = await api.patch(`/api/bookings/${bookingId}/status`, { statusId: 5 });
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Không thể từ chối đơn đặt xe');
@@ -1405,7 +1472,7 @@ export const supplierRejectBooking = async (bookingId) => {
  */
 export const supplierConfirmFullPayment = async (bookingId) => {
     try {
-        const response = await api.put(`/api/supplier/bookings/${bookingId}/confirm-full-payment`);
+        const response = await api.patch(`/api/bookings/${bookingId}/status`, { statusId: 4 });
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Không thể xác nhận đã nhận đủ tiền');
@@ -1428,13 +1495,8 @@ export const getPayoutAmount = async (bookingId) => {
 };
 
 export const getRatingsByBookingId = async (bookingId) => {
-    if (!bookingId) throw new Error('Vui lòng cung cấp bookingId');
-    try {
-        const response = await api.get(`/api/ratings?bookingId=${bookingId}`);
-        return response.data;
-    } catch (error) {
-        throw new Error(error.response?.data?.message || 'Không thể lấy đánh giá theo booking');
-    }
+    // Backend does not have a by-booking endpoint; return empty
+    return [];
 };
 
 export default api;
@@ -1445,7 +1507,7 @@ export const getPendingCars = async () => {
   const res = await api.get('/api/cars/admin/pending-cars', {
     headers: token ? { Authorization: `Bearer ${token}` } : {}
   });
-  return res.data;
+  return res.data?.data ?? res.data;
 };
 
 // Duyệt xe (admin)
@@ -1471,7 +1533,7 @@ export const rejectCar = async (carId) => {
  */
 export const supplierPrepareCar = async (bookingId) => {
     try {
-        const response = await api.put(`/api/supplier/bookings/${bookingId}/prepare`);
+        const response = await api.patch(`/api/bookings/${bookingId}/status`, { statusId: 3 });
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Không thể chuyển sang trạng thái chờ nhận xe');
@@ -1479,11 +1541,11 @@ export const supplierPrepareCar = async (bookingId) => {
 };
 
 /**
- * Supplier xác nhận đã giao xe (chuyển supplierDeliveryConfirm = true)
+ * Supplier xác nhận đã giao xe
  */
 export const supplierConfirmDelivery = async (bookingId) => {
     try {
-        const response = await api.put(`/api/supplier/bookings/${bookingId}/supplier-delivery-confirm`);
+        const response = await api.patch(`/api/bookings/${bookingId}/status`, { statusId: 3 });
         return response.data;
     } catch (error) {
         throw new Error(error.response?.data?.message || 'Không thể xác nhận giao xe');
@@ -2030,15 +2092,21 @@ export const getChatMessagesByBooking = async (bookingId) => {
     }
 };
 
-// Lấy danh sách supplier đã từng nhắn với customer
-export const getSuppliersOfCustomer = async (customerId) => {
+// Lấy danh sách người đã từng nhắn tin (conversations)
+export const getSuppliersOfCustomer = async (_customerId) => {
     try {
-        const response = await api.get(`/api/chat-users/of-customer`, {
-            params: { customerId }
-        });
-        return response.data;
+        const response = await api.get('/api/chat/conversations');
+        const raw = Array.isArray(response.data) ? response.data : (response.data?.data || []);
+        return raw.map(c => ({
+            id: c.userId,
+            userId: c.userId,
+            username: c.userName,
+            fullName: c.userName,
+            avatarUrl: c.avatarUrl,
+            lastMessage: c.lastMessage,
+        }));
     } catch (error) {
-        throw new Error(error.response?.data?.message || 'Lấy danh sách supplier đã từng nhắn với customer thất bại');
+        throw new Error(error.response?.data?.message || 'Lấy danh sách chat thất bại');
     }
 };
 
@@ -2054,54 +2122,12 @@ export const verifyPhoneOtp = async (phone, otp) => {
   return response.data;
 };
 
-export const getSupplierDrivers = async () => {
-  const token = getToken?.() || getItem('token');
-  const res = await api.get('/api/supplier/drivers', {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
-  return res.data;
-};
-
-export const createSupplierDriver = async (driverData) => {
-  const token = getToken?.() || getItem('token');
-  const res = await api.post('/api/supplier/drivers', driverData, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
-  return res.data;
-};
-
-export const updateSupplierDriver = async (driverId, driverData) => {
-  const token = getToken?.() || getItem('token');
-  const res = await api.put(`/api/supplier/drivers/${driverId}`, driverData, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
-  return res.data;
-};
-
-export const deleteSupplierDriver = async (driverId) => {
-  const token = getToken?.() || getItem('token');
-  const res = await api.delete(`/api/supplier/drivers/${driverId}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {}
-  });
-  return res.data;
-};
-
-export const getSupplierInsurances = async () => {
-    const token = getToken?.() || getItem('token');
-    const res = await api.get('/api/supplier/insurances', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-    });
-    return res.data;
-};
-
-// Lấy danh sách bảo trì của supplier
-export const getSupplierMaintenances = async () => {
-    const token = getToken?.() || getItem('token');
-    const res = await api.get('/api/supplier/maintenances', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-    });
-    return res.data;
-};
+export const getSupplierDrivers = async () => { return { data: [] }; };
+export const createSupplierDriver = async (driverData) => { throw new Error('Chức năng chưa hỗ trợ'); };
+export const updateSupplierDriver = async (driverId, driverData) => { throw new Error('Chức năng chưa hỗ trợ'); };
+export const deleteSupplierDriver = async (driverId) => { throw new Error('Chức năng chưa hỗ trợ'); };
+export const getSupplierInsurances = async () => { return { data: [] }; };
+export const getSupplierMaintenances = async () => { return { data: [] }; };
 
 // Tạo bảo hiểm mới
 export const createInsurance = async (insuranceData) => {

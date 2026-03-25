@@ -7,9 +7,6 @@ namespace CarRental.API.Models;
 public class UserDetail
 {
     [Key]
-    [Column("user_detail_id")]
-    public int UserDetailId { get; set; }
-
     [Column("user_id")]
     public int UserId { get; set; }
 
@@ -47,6 +44,10 @@ public class UserDetail
     [MaxLength(500)]
     [Column("driving_license_back_image")]
     public string? DrivingLicenseBackImage { get; set; }
+
+    [MaxLength(500)]
+    [Column("avatar")]
+    public string? Avatar { get; set; }
 
     [Column("is_verified")]
     public bool IsVerified { get; set; } = false;

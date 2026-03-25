@@ -13,6 +13,7 @@ public class CarDto
     public string? LicensePlate { get; set; }
     public int? Year { get; set; }
     public int? Seats { get; set; }
+    public string? Color { get; set; }
     public string? Transmission { get; set; }
     public decimal RentalPricePerDay { get; set; }
     public string? Description { get; set; }
@@ -22,6 +23,7 @@ public class CarDto
     public string? Location { get; set; }
     public int NumOfTrip { get; set; }
     public decimal Rating { get; set; }
+    public decimal AverageRating { get; set; }
     public List<string> ImageUrls { get; set; } = new();
     public DateTime CreatedAt { get; set; }
 }
@@ -39,6 +41,7 @@ public class CarListDto
     public string? Location { get; set; }
     public string? RegionName { get; set; }
     public decimal Rating { get; set; }
+    public decimal AverageRating { get; set; }
     public int NumOfTrip { get; set; }
     public string? ThumbnailUrl { get; set; }
     public string? FuelTypeName { get; set; }

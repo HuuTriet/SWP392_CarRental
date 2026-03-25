@@ -27,29 +27,58 @@ public class Booking
     [Column("end_date")]
     public DateTime EndDate { get; set; }
 
-    [MaxLength(500)]
+    [MaxLength(200)]
     [Column("pickup_location")]
     public string? PickupLocation { get; set; }
 
-    [MaxLength(500)]
+    [MaxLength(200)]
     [Column("dropoff_location")]
     public string? DropoffLocation { get; set; }
+
+    [Column("with_driver")]
+    public bool WithDriver { get; set; } = false;
+
+    [Column("booking_date")]
+    public DateTime BookingDate { get; set; } = DateTime.UtcNow;
+
+    [Column("supplier_delivery_confirm")]
+    public bool SupplierDeliveryConfirm { get; set; } = false;
+
+    [Column("customer_receive_confirm")]
+    public bool CustomerReceiveConfirm { get; set; } = false;
+
+    [Column("customer_return_confirm")]
+    public bool CustomerReturnConfirm { get; set; } = false;
+
+    [Column("supplier_return_confirm")]
+    public bool SupplierReturnConfirm { get; set; } = false;
+
+    [Column("delivery_confirm_time")]
+    public DateTime? DeliveryConfirmTime { get; set; }
+
+    [Column("return_confirm_time")]
+    public DateTime? ReturnConfirmTime { get; set; }
+
+    [Column("extension_days")]
+    public int ExtensionDays { get; set; } = 0;
+
+    [Column("extension_status_id")]
+    public int? ExtensionStatusId { get; set; }
 
     [Column("status_id")]
     public int StatusId { get; set; } = 1;
 
-    [Column("total_price", TypeName = "decimal(15,2)")]
-    public decimal TotalPrice { get; set; }
+    [Column("region_id")]
+    public int RegionId { get; set; }
 
-    [Column("promotion_id")]
+    [Column("seat_number")]
+    public byte SeatNumber { get; set; } = 1;
+
+    [Column("deposit_amount", TypeName = "decimal(10,2)")]
+    public decimal DepositAmount { get; set; } = 0;
+
+    [Column("promo_id")]
     public int? PromotionId { get; set; }
-
-    [MaxLength(50)]
-    [Column("payment_method")]
-    public string? PaymentMethod { get; set; }
-
-    [Column("service_fee", TypeName = "decimal(15,2)")]
-    public decimal ServiceFee { get; set; } = 0;
 
     [Column("is_deleted")]
     public bool IsDeleted { get; set; } = false;
@@ -59,9 +88,6 @@ public class Booking
 
     [Column("updated_at")]
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
-
-    [Column("price_per_day", TypeName = "decimal(15,2)")]
-    public decimal PricePerDay { get; set; }
 
     // Navigation
     [ForeignKey("CustomerId")]
@@ -75,6 +101,9 @@ public class Booking
 
     [ForeignKey("StatusId")]
     public Status? Status { get; set; }
+
+    [ForeignKey("ExtensionStatusId")]
+    public Status? ExtensionStatus { get; set; }
 
     [ForeignKey("PromotionId")]
     public Promotion? Promotion { get; set; }

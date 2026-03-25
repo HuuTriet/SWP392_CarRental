@@ -66,7 +66,7 @@ public class ApplicationDbContext : DbContext
 
         // ── Global soft-delete query filters ─────────────────────────────────
         modelBuilder.Entity<Car>().HasQueryFilter(e => !e.IsDeleted);
-        modelBuilder.Entity<User>().HasQueryFilter(e => e.IsActive);
+        modelBuilder.Entity<User>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<Booking>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<Payment>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<Rating>().HasQueryFilter(e => !e.IsDeleted);
@@ -84,7 +84,7 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<BookingTax>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<SupplierRevenue>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<BankAccount>().HasQueryFilter(e => !e.IsDeleted);
-        modelBuilder.Entity<RegistrationRequest>().HasQueryFilter(e => !e.IsDeleted);
+        // RegistrationRequest has no IsDeleted column
         modelBuilder.Entity<CashPaymentConfirmation>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<CarConditionReport>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<CarConditionImage>().HasQueryFilter(e => !e.IsDeleted);
@@ -98,7 +98,14 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Tax>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<Region>().HasQueryFilter(e => !e.IsDeleted);
 
-        // User uses IsActive for filtering (no is_deleted column)
+        // ── Disable OUTPUT clause for tables with triggers (SQL Server limitation) ──
+        modelBuilder.Entity<Booking>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<User>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<Car>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<BankAccount>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<RegistrationRequest>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<CashPaymentConfirmation>().ToTable(t => t.UseSqlOutputClause(false));
+        modelBuilder.Entity<CarConditionReport>().ToTable(t => t.UseSqlOutputClause(false));
 
         // ── User relationships ────────────────────────────────────────────────
         modelBuilder.Entity<User>()
@@ -106,12 +113,6 @@ public class ApplicationDbContext : DbContext
             .WithMany(r => r.Users)
             .HasForeignKey(u => u.RoleId)
             .OnDelete(DeleteBehavior.Restrict);
-
-        modelBuilder.Entity<User>()
-            .HasOne(u => u.Language)
-            .WithMany(l => l.Users)
-            .HasForeignKey(u => u.LanguageId)
-            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<UserDetail>()
             .HasOne(ud => ud.User)
@@ -143,6 +144,12 @@ public class ApplicationDbContext : DbContext
             .WithMany(r => r.Cars)
             .HasForeignKey(c => c.RegionId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<Car>()
+            .HasOne(c => c.Status)
+            .WithMany()
+            .HasForeignKey(c => c.StatusId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         // ── Booking relationships ─────────────────────────────────────────────
         modelBuilder.Entity<Booking>()
@@ -215,12 +222,6 @@ public class ApplicationDbContext : DbContext
             .WithOne(b => b.Cancellation)
             .HasForeignKey<Cancellation>(c => c.BookingId)
             .OnDelete(DeleteBehavior.Cascade);
-
-        modelBuilder.Entity<Cancellation>()
-            .HasOne(c => c.CancelledByUser)
-            .WithMany()
-            .HasForeignKey(c => c.CancelledBy)
-            .OnDelete(DeleteBehavior.Restrict);
 
         // ── Rating ────────────────────────────────────────────────────────────
         modelBuilder.Entity<Rating>()
@@ -304,7 +305,7 @@ public class ApplicationDbContext : DbContext
         modelBuilder.Entity<Driver>()
             .HasOne(d => d.User)
             .WithMany(u => u.Drivers)
-            .HasForeignKey(d => d.UserId)
+            .HasForeignKey(d => d.SupplierId)
             .OnDelete(DeleteBehavior.Cascade);
 
         // ── CarConditionReport ────────────────────────────────────────────────
@@ -377,11 +378,7 @@ public class ApplicationDbContext : DbContext
             .OnDelete(DeleteBehavior.SetNull);
 
         // ── RegistrationRequest ───────────────────────────────────────────────
-        modelBuilder.Entity<RegistrationRequest>()
-            .HasOne(r => r.User)
-            .WithMany(u => u.RegistrationRequests)
-            .HasForeignKey(r => r.UserId)
-            .OnDelete(DeleteBehavior.Cascade);
+        // No FK to User - stores raw registration data
 
         // ── BankAccount ───────────────────────────────────────────────────────
         modelBuilder.Entity<BankAccount>()
